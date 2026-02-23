@@ -1,601 +1,333 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>alpine linux terminal (v86 in-browser)</title>
-  <meta name="color-scheme" content="dark">
-
-  <!-- xterm css (best effort). if cdns are blocked, we fall back to a textarea. -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alpine Browser VM</title>
   <style>
     :root {
-      --bg: #0b0f14;
-      --panel: #0f1620;
-      --panel2: #0c121a;
-      --text: #dbe6f3;
-      --muted: #9bb0c6;
-      --accent: #4aa3ff;
-      --warn: #ffb84a;
-      --bad: #ff5d5d;
-      --good: #38d97a;
-      --border: rgba(255,255,255,.08);
-      --shadow: 0 10px 30px rgba(0,0,0,.35);
-      --radius: 18px;
+      --bg: #f6f3ed;
+      --ink: #1f2933;
+      --muted: #66717d;
+      --card: #fffdf9;
+      --line: #d6d0c4;
+      --accent: #0d6b4d;
+      --accent-2: #e7f4ed;
     }
-    html, body { height: 100%; }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-      background: radial-gradient(1200px 600px at 20% 0%, rgba(74,163,255,.12), transparent 55%),
-                  radial-gradient(900px 500px at 90% 20%, rgba(56,217,122,.10), transparent 55%),
-                  var(--bg);
-      color: var(--text);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 20% -10%, #fffaf1 0%, transparent 45%),
+        radial-gradient(circle at 100% 0%, #dff2e8 0%, transparent 55%),
+        var(--bg);
+      font-family: "Source Sans 3", "Trebuchet MS", Verdana, sans-serif;
     }
-    .wrap { max-width: 1100px; margin: 0 auto; padding: 14px; }
-    .topbar {
-      display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
-      background: rgba(255,255,255,.04);
-      border: 1px solid var(--border);
-      box-shadow: var(--shadow);
-      padding: 12px;
-      border-radius: var(--radius);
-      position: sticky; top: 10px; z-index: 10;
-      backdrop-filter: blur(10px);
+
+    .wrap {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 18px;
     }
-    button {
-      border: 1px solid var(--border);
-      background: linear-gradient(180deg, rgba(74,163,255,.18), rgba(74,163,255,.08));
-      color: var(--text);
-      padding: 10px 14px;
-      border-radius: 14px;
-      font-weight: 650;
-      cursor: pointer;
+
+    h1 {
+      margin: 0;
+      font-size: 2rem;
+      letter-spacing: 0.02em;
     }
-    button.secondary {
-      background: rgba(255,255,255,.04);
-    }
-    button:disabled { opacity: .5; cursor: not-allowed; }
-    .pill {
-      padding: 8px 12px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      background: rgba(0,0,0,.25);
+
+    .subtitle {
+      margin: 8px 0 16px;
       color: var(--muted);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      font-size: 13px;
     }
-    .pill b { color: var(--text); font-weight: 700; }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--card);
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: #0a523b;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .status {
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--accent-2);
+      color: #0f513a;
+      font-size: 0.95rem;
+    }
+
     .grid {
       display: grid;
-      grid-template-columns: 1.2fr .8fr;
+      grid-template-columns: 1.45fr 0.9fr;
       gap: 12px;
-      margin-top: 12px;
     }
-    @media (max-width: 950px) {
-      .grid { grid-template-columns: 1fr; }
-    }
+
     .card {
-      background: rgba(255,255,255,.04);
-      border: 1px solid var(--border);
-      box-shadow: var(--shadow);
-      border-radius: var(--radius);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
       overflow: hidden;
+      box-shadow: 0 5px 24px rgba(39, 34, 24, 0.08);
     }
-    .card .head {
+
+    .head {
       padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
       display: flex;
       justify-content: space-between;
+      gap: 8px;
       align-items: center;
-      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
-      border-bottom: 1px solid var(--border);
-      gap: 10px;
-      flex-wrap: wrap;
+      background: #fff9ef;
+      font-weight: 600;
     }
-    .card .head .title {
-      font-weight: 750;
-      letter-spacing: .2px;
+
+    .body {
+      padding: 12px;
     }
-    .card .body { padding: 12px; }
-    .hint {
-      margin-top: 10px;
-      color: var(--muted);
-      line-height: 1.35;
-    }
-    .hint code {
-      background: rgba(0,0,0,.35);
-      border: 1px solid var(--border);
-      padding: 2px 6px;
-      border-radius: 10px;
-    }
-    #screen_container {
+
+    #screen {
       width: 100%;
-      height: 520px;
+      aspect-ratio: 4 / 3;
+      min-height: 360px;
       background: #000;
-      border-radius: 14px;
+      border-radius: 8px;
       overflow: hidden;
-      border: 1px solid rgba(255,255,255,.08);
+      border: 1px solid #222;
     }
-    /* v86 puts a canvas inside; make it fit */
-    #screen_container canvas {
+
+    #screen canvas {
+      display: block;
       width: 100% !important;
       height: 100% !important;
       image-rendering: pixelated;
-      display: block;
     }
 
-    #term {
-      width: 100%;
-      height: 520px;
-      background: #000;
-      border-radius: 14px;
-      overflow: hidden;
-      border: 1px solid rgba(255,255,255,.08);
-    }
-    #fallback_serial {
-      width: 100%;
-      height: 520px;
-      background: #000;
-      color: #dbe6f3;
-      border-radius: 14px;
-      border: 1px solid rgba(255,255,255,.08);
-      padding: 10px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      font-size: 13px;
-      line-height: 1.25;
-      resize: none;
-      display: none;
-    }
-    #log {
-      height: 220px;
+    #serial {
+      height: 420px;
       overflow: auto;
-      background: rgba(0,0,0,.35);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 10px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      font-size: 12.5px;
       white-space: pre-wrap;
+      word-break: break-word;
+      background: #0c1117;
+      color: #dde4ed;
+      border: 1px solid #243040;
+      border-radius: 8px;
+      padding: 10px;
+      font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.3;
     }
-    .ok { color: var(--good); }
-    .warn { color: var(--warn); }
-    .bad { color: var(--bad); }
-    .muted { color: var(--muted); }
+
+    #log {
+      height: 170px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.3;
+      color: #203040;
+      background: #f4efe3;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+    }
+
+    .tip {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 0.94rem;
+      line-height: 1.35;
+    }
+
+    @media (max-width: 900px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      #screen {
+        min-height: 300px;
+      }
+    }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/v86@0.5.319/build/libv86.js"></script>
 </head>
-
 <body>
-  <div class="wrap">
-    <div class="topbar">
-      <button id="bootBtn">boot alpine</button>
-      <button id="resetBtn" class="secondary" disabled>reset vm</button>
-      <span class="pill" id="statusPill"><b>status:</b> idle</span>
-      <span class="pill"><b>vm:</b> v86 (wasm)</span>
-      <span class="pill"><b>console:</b> vga + serial(best effort)</span>
-    </div>
+  <main class="wrap">
+    <h1>Alpine Linux in One HTML File</h1>
+    <p class="subtitle">Open this file in your browser and click start. First boot may take a minute.</p>
 
-    <div class="hint">
-      click <b>boot alpine</b>. first boot can take a bit (phone + wifi + emulation = pain).
-      alpine login on install media is often <code>root</code> with an empty password.
-      if you see nothing in serial: use the <b>vga</b> console (left).
+    <div class="toolbar">
+      <button id="start" class="primary">Start Alpine VM</button>
+      <button id="restart" disabled>Restart VM</button>
+      <span class="status" id="status">Idle</span>
     </div>
 
     <div class="grid">
-      <div class="card">
+      <section class="card">
         <div class="head">
-          <div class="title">vga console (click inside to focus)</div>
-          <div class="muted">this is the one that always shows output</div>
+          <span>VGA Console</span>
+          <span>Click inside to focus</span>
         </div>
         <div class="body">
-          <div id="screen_container"></div>
+          <p class="tip">Use this panel for normal Alpine interaction. Login is usually <code>root</code> (no password).</p>
+          <div id="screen"></div>
         </div>
-      </div>
+      </section>
 
-      <div class="card">
+      <section class="card">
         <div class="head">
-          <div class="title">serial terminal</div>
-          <div class="muted">nice when the guest uses ttyS0</div>
+          <span>Serial Output</span>
+          <span>Read-only</span>
         </div>
         <div class="body">
-          <div id="term"></div>
-          <textarea id="fallback_serial" spellcheck="false"></textarea>
+          <div id="serial"></div>
         </div>
-      </div>
+      </section>
 
-      <div class="card" style="grid-column: 1 / -1;">
+      <section class="card" style="grid-column: 1 / -1;">
         <div class="head">
-          <div class="title">debug log (aka “why it’s broken”) </div>
-          <div class="muted">if v86 fails to load, it’ll say exactly where</div>
+          <span>Boot Log</span>
+          <span>Troubleshooting</span>
         </div>
         <div class="body">
           <div id="log"></div>
         </div>
-      </div>
+      </section>
     </div>
-  </div>
+  </main>
 
-<script type="module">
-  // alpine: public download link (x86, virt iso, ~51MB)
-  // from the official "latest-stable" directory listing. 3
-  const ALPINE_ISO = "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86/alpine-virt-3.23.3-x86.iso";
+  <script>
+    const ASSET_BASE = "https://raw.githubusercontent.com/h8d13/h8d13.github.io/67fe9ca4afe8e1faa85cb3364f684bd69e351c9e/images";
 
-  // v86 assets (we try multiple cdns because networks love breaking your fun)
-  const V86_VER = "0.5.319";
+    const CONFIG = {
+      wasm_path: "https://cdn.jsdelivr.net/npm/v86@0.5.319/build/v86.wasm",
+      bios: { url: "https://copy.sh/v86/bios/seabios.bin" },
+      vga_bios: { url: "https://copy.sh/v86/bios/vgabios.bin" },
+      memory_size: 512 * 1024 * 1024,
+      vga_memory_size: 8 * 1024 * 1024,
+      filesystem: {
+        baseurl: ASSET_BASE + "/alpine-rootfs-flat",
+        basefs: ASSET_BASE + "/alpine-fs.json"
+      },
+      bzimage_initrd_from_filesystem: true,
+      cmdline: "rw root=host9p rootfstype=9p rootflags=trans=virtio,cache=loose modules=virtio_pci tsc=reliable",
+      autostart: true
+    };
 
-  const URLS = {
-    v86_mjs: [
-      `https://cdn.jsdelivr.net/npm/v86@${V86_VER}/build/libv86.mjs`,
-      `https://unpkg.com/v86@${V86_VER}/build/libv86.mjs`,
-    ],
-    v86_umd: [
-      `https://cdn.jsdelivr.net/npm/v86@${V86_VER}/build/libv86.js`,
-      `https://unpkg.com/v86@${V86_VER}/build/libv86.js`,
-    ],
-    skypack: [
-      "https://cdn.skypack.dev/v86"
-    ],
-    wasm: [
-      `https://cdn.jsdelivr.net/npm/v86@${V86_VER}/build/v86.wasm`,
-      `https://unpkg.com/v86@${V86_VER}/build/v86.wasm`,
-    ],
-    bios: [
-      `https://cdn.jsdelivr.net/npm/v86@${V86_VER}/bios/seabios.bin`,
-      `https://unpkg.com/v86@${V86_VER}/bios/seabios.bin`,
-    ],
-    vgabios: [
-      `https://cdn.jsdelivr.net/npm/v86@${V86_VER}/bios/vgabios.bin`,
-      `https://unpkg.com/v86@${V86_VER}/bios/vgabios.bin`,
-    ],
+    const startButton = document.getElementById("start");
+    const restartButton = document.getElementById("restart");
+    const statusEl = document.getElementById("status");
+    const screenEl = document.getElementById("screen");
+    const serialEl = document.getElementById("serial");
+    const logEl = document.getElementById("log");
 
-    xterm_js: [
-      "https://cdn.jsdelivr.net/npm/xterm@5.5.0/lib/xterm.js",
-      "https://unpkg.com/xterm@5.5.0/lib/xterm.js",
-    ],
-    xterm_fit_js: [
-      "https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js",
-      "https://unpkg.com/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js",
-    ],
-  };
+    let vm = null;
 
-  const $ = (sel) => document.querySelector(sel);
-  const logEl = $("#log");
-  const statusPill = $("#statusPill");
-
-  function setStatus(text, cls = "") {
-    statusPill.innerHTML = `<b>status:</b> ${text}`;
-    statusPill.className = "pill " + cls;
-  }
-
-  function log(msg, cls = "muted") {
-    const line = document.createElement("div");
-    line.className = cls;
-    line.textContent = msg;
-    logEl.appendChild(line);
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-
-  async function probeHead(url) {
-    try {
-      const res = await fetch(url, { method: "HEAD", cache: "no-store", mode: "cors" });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  async function pickReachable(label, list) {
-    for (const u of list) {
-      if (await probeHead(u)) {
-        log(`ok: ${label} reachable -> ${u}`, "ok");
-        return u;
-      }
-      log(`nope: ${label} blocked/unreachable -> ${u}`, "warn");
-    }
-    log(`warn: ${label} none probed ok; using first anyway`, "warn");
-    return list[0];
-  }
-
-  function loadScript(url, timeoutMs = 15000) {
-    return new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = url;
-      s.async = true;
-
-      const t = setTimeout(() => {
-        s.remove();
-        reject(new Error(`timeout loading ${url}`));
-      }, timeoutMs);
-
-      s.onload = () => { clearTimeout(t); resolve(); };
-      s.onerror = () => { clearTimeout(t); reject(new Error(`failed loading ${url}`)); };
-
-      document.head.appendChild(s);
-    });
-  }
-
-  function extractStarter(mod) {
-    // try common export patterns across builds/cdns
-    if (mod?.V86Starter) return mod.V86Starter;
-    if (mod?.default?.V86Starter) return mod.default.V86Starter;
-    // skypack historically default-exports V86Starter
-    if (typeof mod?.default === "function") return mod.default;
-    return null;
-  }
-
-  async function loadV86Starter() {
-    // 1) try ESM builds (closest to how some modern projects do it)
-    for (const url of URLS.v86_mjs) {
-      try {
-        log(`trying v86 esm import: ${url}`);
-        const mod = await import(url);
-        const Starter = extractStarter(mod);
-        if (Starter) {
-          log(`ok: got V86Starter from esm import`, "ok");
-          return Starter;
-        }
-        log(`warn: esm imported but no V86Starter export found`, "warn");
-      } catch (e) {
-        log(`fail: esm import ${url} -> ${e.message}`, "bad");
-      }
+    function setStatus(text) {
+      statusEl.textContent = text;
     }
 
-    // 2) try skypack (works when jsdelivr/unpkg are blocked)
-    for (const url of URLS.skypack) {
-      try {
-        log(`trying v86 via skypack: ${url}`);
-        const mod = await import(url);
-        const Starter = extractStarter(mod);
-        if (Starter) {
-          log(`ok: got V86Starter from skypack`, "ok");
-          return Starter;
-        }
-        log(`warn: skypack imported but no V86Starter export found`, "warn");
-      } catch (e) {
-        log(`fail: skypack import ${url} -> ${e.message}`, "bad");
-      }
+    function log(text) {
+      logEl.textContent += text + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
     }
 
-    // 3) classic <script> UMD build
-    for (const url of URLS.v86_umd) {
-      try {
-        log(`trying v86 umd script: ${url}`);
-        await loadScript(url);
-        if (window.V86Starter) {
-          log(`ok: V86Starter found on window (umd)`, "ok");
-          return window.V86Starter;
-        }
-        if (window.V86) {
-          log(`ok-ish: V86 found on window (older api). using that.`, "warn");
-          return window.V86; // last resort
-        }
-        log(`fail: script loaded but no V86Starter/V86 global`, "bad");
-      } catch (e) {
-        log(`fail: umd script ${url} -> ${e.message}`, "bad");
-      }
+    function serialWrite(ch) {
+      serialEl.textContent += ch;
+      serialEl.scrollTop = serialEl.scrollHeight;
     }
 
-    throw new Error("V86Starter is undefined. libv86 failed to load from every source.");
-  }
-
-  async function loadXterm() {
-    // if xterm is blocked, we fall back to textarea
-    if (window.Terminal) return true;
-
-    for (const u of URLS.xterm_js) {
-      try {
-        log(`trying xterm: ${u}`);
-        await loadScript(u, 12000);
-        if (window.Terminal) {
-          log(`ok: xterm loaded`, "ok");
-          break;
-        }
-      } catch (e) {
-        log(`fail: xterm ${u} -> ${e.message}`, "warn");
-      }
-    }
-
-    if (!window.Terminal) {
-      log(`warn: xterm not available; using textarea fallback`, "warn");
-      return false;
-    }
-
-    for (const u of URLS.xterm_fit_js) {
-      try {
-        log(`trying xterm-fit: ${u}`);
-        await loadScript(u, 12000);
-        if (window.FitAddon?.FitAddon) {
-          log(`ok: xterm-fit loaded`, "ok");
-          break;
-        }
-      } catch (e) {
-        log(`warn: xterm-fit ${u} -> ${e.message}`, "warn");
-      }
-    }
-
-    return true;
-  }
-
-  let emulator = null;
-  let term = null;
-  let fitAddon = null;
-  let useXterm = false;
-
-  function setupSerialUI() {
-    const termDiv = $("#term");
-    const ta = $("#fallback_serial");
-    termDiv.innerHTML = "";
-    ta.value = "";
-
-    if (useXterm && window.Terminal) {
-      ta.style.display = "none";
-      termDiv.style.display = "block";
-
-      term = new window.Terminal({
-        convertEol: true,
-        cursorBlink: true,
-        fontSize: 13,
-        theme: { background: "#000000" },
-      });
-
-      if (window.FitAddon?.FitAddon) {
-        fitAddon = new window.FitAddon.FitAddon();
-        term.loadAddon(fitAddon);
-      }
-
-      term.open(termDiv);
-      fitAddon?.fit?.();
-
-      window.addEventListener("resize", () => fitAddon?.fit?.());
-
-      // send user keystrokes to serial (best effort; depends on guest using ttyS0)
-      term.onData((data) => {
-        if (!emulator) return;
-        for (const ch of data) {
-          const code = ch === "\n" ? 13 : ch.charCodeAt(0);
-          emulator.serial0_send(code);
-        }
-      });
-
-      term.writeln("serial: xterm");
-      return;
-    }
-
-    // fallback textarea
-    termDiv.style.display = "none";
-    ta.style.display = "block";
-    ta.value += "serial: textarea fallback\n";
-    ta.addEventListener("keydown", (e) => {
-      if (!emulator) return;
-      if (e.key === "Enter") {
-        emulator.serial0_send(13);
+    async function startVm() {
+      if (typeof V86 === "undefined") {
+        setStatus("Failed");
+        log("libv86.js did not load. Check your internet connection.");
         return;
       }
-      if (e.key.length === 1) emulator.serial0_send(e.key.charCodeAt(0));
-      if (e.key === "Backspace") emulator.serial0_send(8);
-    });
-  }
 
-  function serialWrite(text) {
-    const ta = $("#fallback_serial");
-    if (useXterm && term) {
-      term.write(text);
-    } else {
-      ta.value += text;
-      ta.scrollTop = ta.scrollHeight;
-    }
-  }
+      startButton.disabled = true;
+      setStatus("Starting");
+      log("Preparing Alpine VM...");
 
-  async function boot() {
-    $("#bootBtn").disabled = true;
-    setStatus("loading…");
-    logEl.innerHTML = "";
-    log("starting boot…");
-
-    if (location.protocol === "file:") {
-      log("warning: you are on file:// . v86 loads roms/images via fetch/xhr, so serve this over http (ex: python http.server).", "warn");
-    }
-
-    try {
-      // load v86
-      const V86Starter = await loadV86Starter();
-
-      // choose working urls (helps when a cdn is blocked)
-      const wasmUrl = await pickReachable("v86.wasm", URLS.wasm);
-      const biosUrl = await pickReachable("seabios.bin", URLS.bios);
-      const vgaBiosUrl = await pickReachable("vgabios.bin", URLS.vgabios);
-
-      // xterm (optional)
-      useXterm = await loadXterm();
-      setupSerialUI();
-
-      // wipe old vm
-      if (emulator) {
-        try { emulator.stop?.(); } catch {}
-        emulator = null;
-        $("#screen_container").innerHTML = "";
+      if (vm) {
+        try {
+          vm.stop();
+        } catch (error) {
+          log("Warning stopping previous VM: " + error.message);
+        }
+        vm = null;
       }
 
-      log(`using alpine iso: ${ALPINE_ISO}`);
-      log("creating emulator…");
+      screenEl.replaceChildren();
+      serialEl.textContent = "";
 
-      emulator = new V86Starter({
-        wasm_path: wasmUrl,             // v86 wasm (jit)
-        memory_size: 160 * 1024 * 1024, // a little breathing room
-        vga_memory_size: 8 * 1024 * 1024,
-        screen_container: $("#screen_container"),
+      try {
+        vm = new V86({
+          ...CONFIG,
+          screen_container: screenEl,
+          serial_container: serialEl
+        });
 
-        bios: { url: biosUrl },
-        vga_bios: { url: vgaBiosUrl },
+        vm.add_listener("emulator-ready", function() {
+          setStatus("Running");
+          restartButton.disabled = false;
+          log("Alpine VM is running.");
+        });
 
-        cdrom: { url: ALPINE_ISO },
+        vm.add_listener("download-progress", function(e) {
+          if (!e || !e.file_name) {
+            return;
+          }
+          const pct = e.total ? Math.floor((e.loaded / e.total) * 100) : 0;
+          setStatus("Downloading " + pct + "%");
+        });
 
-        // serial can still be useful, but alpine iso defaults to vga console
-        autostart: true,
-      });
+        vm.add_listener("serial0-output-byte", function(b) {
+          serialWrite(String.fromCharCode(b));
+        });
 
-      // serial output hook
-      emulator.add_listener("serial0-output-byte", (b) => {
-        // basic byte -> char
-        serialWrite(String.fromCharCode(b));
-      });
-
-      // status listeners
-      emulator.add_listener("emulator-ready", () => {
-        log("emulator-ready", "ok");
-        setStatus("running", "ok");
-        $("#resetBtn").disabled = false;
-        $("#bootBtn").disabled = true;
-        // hint in serial panel
-        serialWrite("\n\nclick inside the vga console (left). alpine usually lets you login as root (empty password) on install media.\n");
-      });
-
-      emulator.add_listener("download-progress", (e) => {
-        // e: { file, total, loaded } sometimes; handle safely
-        if (!e) return;
-        const file = e.file || "download";
-        const loaded = (e.loaded ?? 0);
-        const total = (e.total ?? 0);
-        if (total > 0) {
-          const pct = Math.floor((loaded / total) * 100);
-          setStatus(`downloading ${file} ${pct}%`);
-        } else {
-          setStatus(`downloading ${file}…`);
-        }
-      });
-
-      setStatus("booting…");
-      log("boot started. if it looks frozen, it’s probably just being a phone.", "muted");
-
-    } catch (err) {
-      log(`error: ${err.message}`, "bad");
-      setStatus("error", "bad");
-      $("#bootBtn").disabled = false;
-
-      log("if you keep seeing 'V86Starter is undefined':", "warn");
-      log("- your network/adblock is blocking cdns (jsdelivr/unpkg/skypack). try another wifi or disable shields.", "warn");
-      log("- OR host the v86 files locally like some projects do (same-origin = fewer headaches).", "warn");
+        log("Booting Alpine from hosted root filesystem...");
+      } catch (error) {
+        setStatus("Failed");
+        startButton.disabled = false;
+        log("Failed to start VM: " + error.message);
+      }
     }
-  }
 
-  function reset() {
-    if (!emulator) return;
-    try {
-      // v86 has restart in many builds; if not, just re-boot
-      emulator.restart?.();
-      log("vm reset requested", "ok");
-      setStatus("restarting…");
-    } catch {
-      log("restart() not available; rebooting by recreating vm", "warn");
-      boot();
-    }
-  }
+    startButton.addEventListener("click", startVm);
+    restartButton.addEventListener("click", function() {
+      setStatus("Restarting");
+      log("Restart requested...");
+      startVm();
+    });
 
-  $("#bootBtn").addEventListener("click", boot);
-  $("#resetBtn").addEventListener("click", reset);
-
-  // tiny startup note
-  log("ready. click 'boot alpine'.");
-  log("this is built on v86 (copy/v86) embedding patterns 4 and uses the official alpine virt x86 iso 5 (because v86 is 32-bit x86) 6");
-</script>
+    log("Ready. Click Start Alpine VM.");
+  </script>
 </body>
 </html>
