@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>alpine linux in browser</title>
+<style>
+body {
+  margin: 0;
+  background: black;
+  color: #00ffcc;
+  font-family: monospace;
+}
+#screen {
+  width: 100vw;
+  height: 100vh;
+}
+</style>
+</head>
+<body>
+
+<div id="screen"></div>
+
+<script src="https://cdn.jsdelivr.net/gh/copy/v86@master/build/v86_all.js"></script>
+
+<script>
+"use strict";
+
+var emulator = new V86({
+    wasm_path: "https://cdn.jsdelivr.net/gh/copy/v86@master/build/v86.wasm",
+
+    memory_size: 256 * 1024 * 1024,
+    vga_memory_size: 8 * 1024 * 1024,
+
+    screen_container: document.getElementById("screen"),
+    serial_container: document.getElementById("screen"),
+
+    autostart: true,
+
+    // official alpine kernel
+    bzimage: {
+        url: "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86/netboot/vmlinuz"
+    },
+
+    // official alpine initramfs
+    initrd: {
+        url: "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86/netboot/initramfs"
+    },
+
+    cmdline: "console=ttyS0 alpine_dev=cdrom:iso9660 alpine_repo=https://dl-cdn.alpinelinux.org/alpine/latest-stable/main"
+});
+</script>
+
+</body>
+</html>
