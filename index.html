@@ -279,14 +279,19 @@
     let saveInProgress = false;
     let loadedStateForBoot = null;
     let loadedStateSource = null;
+    let persistentDisk = null;
 
     const DB_NAME = "alpine-browser-vm";
     const STORE_NAME = "state";
+    const DISK_STORE_NAME = "disk_chunks";
     const STATE_KEY = "snapshot";
     const META_KEY = "meta";
+    const DISK_META_KEY = "disk_meta";
     const FILE_MAGIC = -2039052682;
     const FILE_VERSION = 6;
     const AUTO_SAVE_MS = 45000;
+    const DISK_CHUNK_SIZE = 64 * 1024;
+    const DISK_SIZE_BYTES = 1024 * 1024 * 1024;
 
     function formatBytes(bytes) {
       if (!bytes || bytes < 1024) {
@@ -316,11 +321,14 @@
           reject(new Error("IndexedDB is not available in this browser."));
           return;
         }
-        const request = indexedDB.open(DB_NAME, 1);
+        const request = indexedDB.open(DB_NAME, 2);
         request.onupgradeneeded = function() {
           const db = request.result;
           if (!db.objectStoreNames.contains(STORE_NAME)) {
             db.createObjectStore(STORE_NAME);
+          }
+          if (!db.objectStoreNames.contains(DISK_STORE_NAME)) {
+            db.createObjectStore(DISK_STORE_NAME);
           }
         };
         request.onsuccess = function() {
@@ -332,11 +340,12 @@
       });
     }
 
-    async function idbGet(key) {
+    async function idbGet(key, storeName) {
+      const targetStore = storeName || STORE_NAME;
       const db = await openDb();
       return new Promise(function(resolve, reject) {
-        const tx = db.transaction(STORE_NAME, "readonly");
-        const store = tx.objectStore(STORE_NAME);
+        const tx = db.transaction(targetStore, "readonly");
+        const store = tx.objectStore(targetStore);
         const request = store.get(key);
         request.onsuccess = function() { resolve(request.result || null); };
         request.onerror = function() { reject(request.error || new Error("IndexedDB read failed.")); };
@@ -345,11 +354,12 @@
       });
     }
 
-    async function idbPut(key, value) {
+    async function idbPut(key, value, storeName) {
+      const targetStore = storeName || STORE_NAME;
       const db = await openDb();
       return new Promise(function(resolve, reject) {
-        const tx = db.transaction(STORE_NAME, "readwrite");
-        const store = tx.objectStore(STORE_NAME);
+        const tx = db.transaction(targetStore, "readwrite");
+        const store = tx.objectStore(targetStore);
         const request = store.put(value, key);
         request.onsuccess = function() { resolve(); };
         request.onerror = function() { reject(request.error || new Error("IndexedDB write failed.")); };
@@ -358,11 +368,12 @@
       });
     }
 
-    async function idbDelete(keys) {
+    async function idbDelete(keys, storeName) {
+      const targetStore = storeName || STORE_NAME;
       const db = await openDb();
       return new Promise(function(resolve, reject) {
-        const tx = db.transaction(STORE_NAME, "readwrite");
-        const store = tx.objectStore(STORE_NAME);
+        const tx = db.transaction(targetStore, "readwrite");
+        const store = tx.objectStore(targetStore);
         for (const key of keys) {
           store.delete(key);
         }
@@ -371,6 +382,176 @@
       }).finally(function() {
         db.close();
       });
+    }
+
+    async function idbPutMany(entries, storeName) {
+      const targetStore = storeName || STORE_NAME;
+      const db = await openDb();
+      return new Promise(function(resolve, reject) {
+        const tx = db.transaction(targetStore, "readwrite");
+        const store = tx.objectStore(targetStore);
+        for (const entry of entries) {
+          store.put(entry.value, entry.key);
+        }
+        tx.oncomplete = function() { resolve(); };
+        tx.onerror = function() { reject(tx.error || new Error("IndexedDB batch write failed.")); };
+      }).finally(function() {
+        db.close();
+      });
+    }
+
+    class IndexedDbDiskBuffer {
+      constructor(byteLength, chunkSize) {
+        this.byteLength = byteLength;
+        this.chunkSize = chunkSize;
+        this.onprogress = null;
+        this.onload = null;
+        this.cache = new Map();
+        this.dirty = new Set();
+        this.flushTimer = null;
+        this.flushing = false;
+      }
+
+      chunkKey(index) {
+        return "chunk:" + index;
+      }
+
+      async load() {
+        const meta = await idbGet(DISK_META_KEY);
+        if (!meta) {
+          await idbPut(DISK_META_KEY, {
+            byteLength: this.byteLength,
+            chunkSize: this.chunkSize,
+            createdAt: Date.now()
+          });
+        } else if (meta.byteLength !== this.byteLength || meta.chunkSize !== this.chunkSize) {
+          throw new Error("Saved disk format mismatch. Clear Saved Data to recreate disk.");
+        }
+        if (this.onload) {
+          this.onload({ loaded: this.byteLength, total: this.byteLength, lengthComputable: true });
+        }
+      }
+
+      async readChunk(index) {
+        if (this.cache.has(index)) {
+          return this.cache.get(index);
+        }
+        const existing = await idbGet(this.chunkKey(index), DISK_STORE_NAME);
+        let chunk = null;
+        if (existing instanceof Uint8Array) {
+          chunk = existing;
+        } else if (existing instanceof ArrayBuffer) {
+          chunk = new Uint8Array(existing);
+        }
+        if (!chunk || chunk.byteLength !== this.chunkSize) {
+          chunk = new Uint8Array(this.chunkSize);
+        }
+        this.cache.set(index, chunk);
+        return chunk;
+      }
+
+      scheduleFlush() {
+        if (this.flushTimer) {
+          return;
+        }
+        this.flushTimer = setTimeout(() => {
+          this.flushTimer = null;
+          this.flushNow();
+        }, 1500);
+      }
+
+      async flushNow() {
+        if (this.flushing || this.dirty.size === 0) {
+          return;
+        }
+        this.flushing = true;
+        try {
+          const entries = [];
+          for (const index of this.dirty) {
+            const chunk = this.cache.get(index);
+            if (!chunk) {
+              continue;
+            }
+            entries.push({
+              key: this.chunkKey(index),
+              value: chunk.slice(0)
+            });
+          }
+          if (entries.length) {
+            await idbPutMany(entries, DISK_STORE_NAME);
+          }
+          this.dirty.clear();
+          await idbPut(META_KEY, {
+            ...(await idbGet(META_KEY) || {}),
+            diskSavedAt: Date.now(),
+            diskSize: this.byteLength
+          });
+        } finally {
+          this.flushing = false;
+        }
+      }
+
+      get(offset, length, callback) {
+        this.readRange(offset, length).then(callback).catch(function(error) {
+          console.error("Disk read failed:", error);
+          callback(new Uint8Array(length));
+        });
+      }
+
+      async readRange(offset, length) {
+        const out = new Uint8Array(length);
+        let remaining = length;
+        let outPos = 0;
+        let ptr = offset;
+        while (remaining > 0) {
+          const index = Math.floor(ptr / this.chunkSize);
+          const chunkOffset = ptr % this.chunkSize;
+          const take = Math.min(remaining, this.chunkSize - chunkOffset);
+          const chunk = await this.readChunk(index);
+          out.set(chunk.subarray(chunkOffset, chunkOffset + take), outPos);
+          outPos += take;
+          ptr += take;
+          remaining -= take;
+        }
+        return out;
+      }
+
+      set(offset, data, callback) {
+        this.writeRange(offset, data).then(function() {
+          if (callback) {
+            callback();
+          }
+        }).catch(function(error) {
+          console.error("Disk write failed:", error);
+          if (callback) {
+            callback();
+          }
+        });
+      }
+
+      async writeRange(offset, data) {
+        let remaining = data.byteLength;
+        let inPos = 0;
+        let ptr = offset;
+        while (remaining > 0) {
+          const index = Math.floor(ptr / this.chunkSize);
+          const chunkOffset = ptr % this.chunkSize;
+          const take = Math.min(remaining, this.chunkSize - chunkOffset);
+          const chunk = await this.readChunk(index);
+          chunk.set(data.subarray(inPos, inPos + take), chunkOffset);
+          this.dirty.add(index);
+          inPos += take;
+          ptr += take;
+          remaining -= take;
+        }
+        this.scheduleFlush();
+      }
+
+      get_state() {
+        return [this.byteLength];
+      }
+
+      set_state() {}
     }
 
     function base64ToArrayBuffer(base64) {
@@ -478,6 +659,22 @@
 
     async function clearStoredSnapshot() {
       await idbDelete([STATE_KEY, META_KEY]);
+      const meta = await idbGet(DISK_META_KEY);
+      if (meta && meta.byteLength) {
+        const chunkCount = Math.ceil(meta.byteLength / (meta.chunkSize || DISK_CHUNK_SIZE));
+        const keys = [];
+        for (let i = 0; i < chunkCount; i += 1) {
+          keys.push("chunk:" + i);
+        }
+        if (keys.length) {
+          await idbDelete(keys, DISK_STORE_NAME);
+        }
+      }
+      await idbDelete([DISK_META_KEY]);
+      if (persistentDisk) {
+        persistentDisk.cache.clear();
+        persistentDisk.dirty.clear();
+      }
       loadedStateForBoot = null;
       loadedStateSource = null;
     }
@@ -567,6 +764,11 @@
         const assets = getDecodedAssets();
         const relayUrl = relayUrlInput.value.trim();
         const networkEnabled = netToggle.checked && relayUrl.length > 0;
+        if (!persistentDisk) {
+          persistentDisk = new IndexedDbDiskBuffer(DISK_SIZE_BYTES, DISK_CHUNK_SIZE);
+        }
+        await persistentDisk.load();
+        log("Persistent disk ready (" + formatBytes(DISK_SIZE_BYTES) + ").");
 
         vm = new V86({
           ...CONFIG,
@@ -578,6 +780,7 @@
           bios: { buffer: assets.bios.slice(0) },
           vga_bios: { buffer: assets.vgabios.slice(0) },
           cdrom: { buffer: assets.iso.slice(0) },
+          hda: persistentDisk,
           network_relay_url: networkEnabled ? relayUrl : undefined,
           initial_state: loadedStateForBoot || undefined,
           screen_container: screenEl
@@ -646,22 +849,29 @@
     clearButton.addEventListener("click", async function() {
       try {
         await clearStoredSnapshot();
-        log("Cleared persisted VM snapshot.");
+        log("Cleared persisted VM snapshot and virtual disk.");
       } catch (error) {
         log("Failed clearing persisted snapshot: " + error.message);
       }
     });
     window.addEventListener("pagehide", function() {
       saveSnapshot("pagehide");
+      if (persistentDisk) {
+        persistentDisk.flushNow();
+      }
     });
     document.addEventListener("visibilitychange", function() {
       if (document.visibilityState === "hidden") {
         saveSnapshot("hidden");
+        if (persistentDisk) {
+          persistentDisk.flushNow();
+        }
       }
     });
 
     log("Ready. Click Start Alpine VM.");
     log("Persistence: VM state is auto-saved in IndexedDB and restored on next start.");
+    log("Disk: a real 1.00 GB virtual hard disk is stored in IndexedDB.");
     log("Import/Export: use .v86state files to move the full machine state.");
     log("Network: toggle relay before boot if you want internet from inside Alpine.");
     updateButtonsForVmState(false);
