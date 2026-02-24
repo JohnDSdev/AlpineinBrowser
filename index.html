@@ -54,6 +54,26 @@
       margin-bottom: 12px;
     }
 
+    .toolbar label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--card);
+      font-size: 0.95rem;
+    }
+
+    .toolbar input[type="url"] {
+      min-width: 250px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: var(--card);
+      color: var(--ink);
+    }
+
     button {
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -182,11 +202,18 @@
 <body>
   <main class="wrap">
     <h1>Alpine Linux in One HTML File</h1>
-    <p class="subtitle">Fully local: no external network calls. Open this file, then click start.</p>
+    <p class="subtitle">Open this file and boot locally. Optional network relay, persistent state, and backup restore are built in.</p>
 
     <div class="toolbar">
       <button id="start" class="primary">Start Alpine VM</button>
       <button id="restart" disabled>Restart VM</button>
+      <button id="save" disabled>Save State</button>
+      <button id="export" disabled>Export Data</button>
+      <button id="import">Import Data</button>
+      <button id="clear">Clear Saved Data</button>
+      <label><input type="checkbox" id="netToggle" checked> Network</label>
+      <input id="relayUrl" type="url" value="wss://relay.widgetry.org/" spellcheck="false">
+      <input id="importFile" type="file" accept=".bin,.v86state,application/octet-stream" hidden>
       <span class="status" id="status">Idle</span>
     </div>
 
@@ -234,6 +261,13 @@
 
     const startButton = document.getElementById("start");
     const restartButton = document.getElementById("restart");
+    const saveButton = document.getElementById("save");
+    const exportButton = document.getElementById("export");
+    const importButton = document.getElementById("import");
+    const clearButton = document.getElementById("clear");
+    const netToggle = document.getElementById("netToggle");
+    const relayUrlInput = document.getElementById("relayUrl");
+    const importFileInput = document.getElementById("importFile");
     const statusEl = document.getElementById("status");
     const screenEl = document.getElementById("screen");
     const serialEl = document.getElementById("serial");
@@ -241,6 +275,103 @@
 
     let vm = null;
     let decodedAssets = null;
+    let autoSaveTimer = null;
+    let saveInProgress = false;
+    let loadedStateForBoot = null;
+    let loadedStateSource = null;
+
+    const DB_NAME = "alpine-browser-vm";
+    const STORE_NAME = "state";
+    const STATE_KEY = "snapshot";
+    const META_KEY = "meta";
+    const FILE_MAGIC = -2039052682;
+    const FILE_VERSION = 6;
+    const AUTO_SAVE_MS = 45000;
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes < 1024) {
+        return String(bytes || 0) + " B";
+      }
+      const units = ["KB", "MB", "GB"];
+      let value = bytes / 1024;
+      let unitIndex = 0;
+      while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+      }
+      return value.toFixed(2) + " " + units[unitIndex];
+    }
+
+    function isLikelyV86State(buffer) {
+      if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 16) {
+        return false;
+      }
+      const view = new Int32Array(buffer, 0, 4);
+      return view[0] === FILE_MAGIC && view[1] === FILE_VERSION;
+    }
+
+    function openDb() {
+      return new Promise(function(resolve, reject) {
+        if (!("indexedDB" in window)) {
+          reject(new Error("IndexedDB is not available in this browser."));
+          return;
+        }
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onupgradeneeded = function() {
+          const db = request.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME);
+          }
+        };
+        request.onsuccess = function() {
+          resolve(request.result);
+        };
+        request.onerror = function() {
+          reject(request.error || new Error("Failed to open IndexedDB."));
+        };
+      });
+    }
+
+    async function idbGet(key) {
+      const db = await openDb();
+      return new Promise(function(resolve, reject) {
+        const tx = db.transaction(STORE_NAME, "readonly");
+        const store = tx.objectStore(STORE_NAME);
+        const request = store.get(key);
+        request.onsuccess = function() { resolve(request.result || null); };
+        request.onerror = function() { reject(request.error || new Error("IndexedDB read failed.")); };
+      }).finally(function() {
+        db.close();
+      });
+    }
+
+    async function idbPut(key, value) {
+      const db = await openDb();
+      return new Promise(function(resolve, reject) {
+        const tx = db.transaction(STORE_NAME, "readwrite");
+        const store = tx.objectStore(STORE_NAME);
+        const request = store.put(value, key);
+        request.onsuccess = function() { resolve(); };
+        request.onerror = function() { reject(request.error || new Error("IndexedDB write failed.")); };
+      }).finally(function() {
+        db.close();
+      });
+    }
+
+    async function idbDelete(keys) {
+      const db = await openDb();
+      return new Promise(function(resolve, reject) {
+        const tx = db.transaction(STORE_NAME, "readwrite");
+        const store = tx.objectStore(STORE_NAME);
+        for (const key of keys) {
+          store.delete(key);
+        }
+        tx.oncomplete = function() { resolve(); };
+        tx.onerror = function() { reject(tx.error || new Error("IndexedDB delete failed.")); };
+      }).finally(function() {
+        db.close();
+      });
+    }
 
     function base64ToArrayBuffer(base64) {
       const binary = atob(base64);
@@ -281,6 +412,132 @@
       serialEl.scrollTop = serialEl.scrollHeight;
     }
 
+    function updateButtonsForVmState(running) {
+      restartButton.disabled = !running;
+      saveButton.disabled = !running;
+      exportButton.disabled = false;
+    }
+
+    async function loadStoredSnapshot() {
+      try {
+        const snapshot = await idbGet(STATE_KEY);
+        if (snapshot && snapshot instanceof ArrayBuffer && isLikelyV86State(snapshot)) {
+          loadedStateForBoot = snapshot;
+          loadedStateSource = "stored";
+          const meta = await idbGet(META_KEY);
+          if (meta && meta.savedAt) {
+            log("Found persisted snapshot from " + new Date(meta.savedAt).toLocaleString() + ".");
+          } else {
+            log("Found persisted snapshot.");
+          }
+          return;
+        }
+      } catch (error) {
+        log("Warning loading persisted snapshot: " + error.message);
+      }
+      loadedStateForBoot = null;
+      loadedStateSource = null;
+    }
+
+    async function saveSnapshot(reason) {
+      if (!vm || saveInProgress) {
+        return;
+      }
+      saveInProgress = true;
+      try {
+        const state = await vm.save_state();
+        await idbPut(STATE_KEY, state);
+        await idbPut(META_KEY, {
+          savedAt: Date.now(),
+          size: state.byteLength,
+          reason: reason || "manual"
+        });
+        loadedStateForBoot = state;
+        loadedStateSource = "stored";
+        log("Saved VM state (" + formatBytes(state.byteLength) + ").");
+      } catch (error) {
+        log("Failed to save state: " + error.message);
+      } finally {
+        saveInProgress = false;
+      }
+    }
+
+    function startAutoSave() {
+      stopAutoSave();
+      autoSaveTimer = setInterval(function() {
+        saveSnapshot("autosave");
+      }, AUTO_SAVE_MS);
+    }
+
+    function stopAutoSave() {
+      if (autoSaveTimer) {
+        clearInterval(autoSaveTimer);
+        autoSaveTimer = null;
+      }
+    }
+
+    async function clearStoredSnapshot() {
+      await idbDelete([STATE_KEY, META_KEY]);
+      loadedStateForBoot = null;
+      loadedStateSource = null;
+    }
+
+    async function exportSnapshot() {
+      let state = null;
+      if (vm) {
+        try {
+          state = await vm.save_state();
+        } catch (error) {
+          log("Live export failed, trying stored snapshot: " + error.message);
+        }
+      }
+
+      if (!state) {
+        state = await idbGet(STATE_KEY);
+      }
+      if (!state || !(state instanceof ArrayBuffer) || !isLikelyV86State(state)) {
+        log("No valid VM state available to export.");
+        return;
+      }
+
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const blob = new Blob([state], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "alpine-vm-state-" + stamp + ".v86state";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      log("Exported VM state (" + formatBytes(state.byteLength) + ").");
+    }
+
+    async function handleImportFile(file) {
+      if (!file) {
+        return;
+      }
+      const buffer = await file.arrayBuffer();
+      if (!isLikelyV86State(buffer)) {
+        log("Import rejected: file is not a valid v86 state image.");
+        return;
+      }
+      await idbPut(STATE_KEY, buffer);
+      await idbPut(META_KEY, {
+        savedAt: Date.now(),
+        size: buffer.byteLength,
+        reason: "import"
+      });
+      loadedStateForBoot = buffer;
+      loadedStateSource = "imported";
+      log("Imported VM state (" + formatBytes(buffer.byteLength) + ").");
+
+      if (vm) {
+        log("Restarting VM to apply imported state...");
+        await startVm();
+      }
+    }
+
     async function startVm() {
       if (typeof V86 === "undefined" || typeof window.VM_ASSETS_B64 === "undefined") {
         setStatus("Failed");
@@ -291,10 +548,11 @@
       startButton.disabled = true;
       setStatus("Starting");
       log("Preparing Alpine VM...");
+      stopAutoSave();
 
       if (vm) {
         try {
-          vm.stop();
+          await vm.stop();
         } catch (error) {
           log("Warning stopping previous VM: " + error.message);
         }
@@ -305,7 +563,10 @@
       serialEl.textContent = "";
 
       try {
+        await loadStoredSnapshot();
         const assets = getDecodedAssets();
+        const relayUrl = relayUrlInput.value.trim();
+        const networkEnabled = netToggle.checked && relayUrl.length > 0;
 
         vm = new V86({
           ...CONFIG,
@@ -317,13 +578,25 @@
           bios: { buffer: assets.bios.slice(0) },
           vga_bios: { buffer: assets.vgabios.slice(0) },
           cdrom: { buffer: assets.iso.slice(0) },
+          network_relay_url: networkEnabled ? relayUrl : undefined,
+          initial_state: loadedStateForBoot || undefined,
           screen_container: screenEl
         });
 
         vm.add_listener("emulator-ready", function() {
           setStatus("Running");
-          restartButton.disabled = false;
-          log("Alpine VM is running.");
+          updateButtonsForVmState(true);
+          if (loadedStateForBoot) {
+            log("VM resumed from " + loadedStateSource + " snapshot.");
+          } else {
+            log("Alpine VM started from bundled ISO.");
+          }
+          if (networkEnabled) {
+            log("Network relay enabled: " + relayUrl);
+          } else {
+            log("Network relay disabled.");
+          }
+          startAutoSave();
         });
 
         vm.add_listener("download-progress", function(e) {
@@ -338,23 +611,61 @@
           serialWrite(String.fromCharCode(b));
         });
 
-        log("Booting Alpine from bundled local ISO...");
+        log("Booting VM...");
       } catch (error) {
         setStatus("Failed");
         startButton.disabled = false;
+        updateButtonsForVmState(false);
         log("Failed to start VM: " + error.message);
       }
     }
 
     startButton.addEventListener("click", startVm);
-    restartButton.addEventListener("click", function() {
+    restartButton.addEventListener("click", async function() {
       setStatus("Restarting");
       log("Restart requested...");
+      await saveSnapshot("restart");
       startVm();
+    });
+    saveButton.addEventListener("click", function() {
+      saveSnapshot("manual");
+    });
+    exportButton.addEventListener("click", function() {
+      exportSnapshot();
+    });
+    importButton.addEventListener("click", function() {
+      importFileInput.click();
+    });
+    importFileInput.addEventListener("change", function(e) {
+      const file = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+      handleImportFile(file).catch(function(error) {
+        log("Import failed: " + error.message);
+      });
+      importFileInput.value = "";
+    });
+    clearButton.addEventListener("click", async function() {
+      try {
+        await clearStoredSnapshot();
+        log("Cleared persisted VM snapshot.");
+      } catch (error) {
+        log("Failed clearing persisted snapshot: " + error.message);
+      }
+    });
+    window.addEventListener("pagehide", function() {
+      saveSnapshot("pagehide");
+    });
+    document.addEventListener("visibilitychange", function() {
+      if (document.visibilityState === "hidden") {
+        saveSnapshot("hidden");
+      }
     });
 
     log("Ready. Click Start Alpine VM.");
-    log("This build is fully local and does not call external hosts at runtime.");
+    log("Persistence: VM state is auto-saved in IndexedDB and restored on next start.");
+    log("Import/Export: use .v86state files to move the full machine state.");
+    log("Network: toggle relay before boot if you want internet from inside Alpine.");
+    updateButtonsForVmState(false);
+    exportButton.disabled = false;
   </script>
 </body>
 </html>
