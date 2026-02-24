@@ -2,6 +2,15 @@
 
 Single-file project that boots Alpine Linux in your browser using v86.
 
+This repo now includes all required VM assets locally:
+
+- v86 runtime JS
+- v86 WebAssembly payload
+- SeaBIOS + VGA BIOS
+- Alpine Linux ISO
+
+No external network calls are required at runtime.
+
 ## Your Flow
 
 1. Download the repository ZIP from GitHub.
@@ -11,6 +20,6 @@ Single-file project that boots Alpine Linux in your browser using v86.
 
 ## Notes
 
-- First boot can take a little time while assets download.
-- You need internet access while using the page (it pulls VM assets from public URLs).
+- First boot can take a little time while the browser decodes bundled assets.
 - Use the VGA panel as the primary console.
+- The project is intentionally large because VM binaries are bundled.

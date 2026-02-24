@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Alpine Browser VM</title>
+  <title>Alpine Browser VM (Offline)</title>
   <style>
     :root {
       --bg: #f6f3ed;
@@ -176,12 +176,13 @@
       }
     }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/v86@0.5.319/build/libv86.js"></script>
+  <script src="assets/js/libv86.js"></script>
+  <script src="assets/js/vm-assets.js"></script>
 </head>
 <body>
   <main class="wrap">
     <h1>Alpine Linux in One HTML File</h1>
-    <p class="subtitle">Open this file in your browser and click start. First boot may take a minute.</p>
+    <p class="subtitle">Fully local: no external network calls. Open this file, then click start.</p>
 
     <div class="toolbar">
       <button id="start" class="primary">Start Alpine VM</button>
@@ -204,7 +205,7 @@
       <section class="card">
         <div class="head">
           <span>Serial Output</span>
-          <span>Read-only</span>
+          <span>Read-only mirror</span>
         </div>
         <div class="body">
           <div id="serial"></div>
@@ -224,20 +225,10 @@
   </main>
 
   <script>
-    const ASSET_BASE = "https://raw.githubusercontent.com/h8d13/h8d13.github.io/67fe9ca4afe8e1faa85cb3364f684bd69e351c9e/images";
-
     const CONFIG = {
-      wasm_path: "https://cdn.jsdelivr.net/npm/v86@0.5.319/build/v86.wasm",
-      bios: { url: "https://copy.sh/v86/bios/seabios.bin" },
-      vga_bios: { url: "https://copy.sh/v86/bios/vgabios.bin" },
       memory_size: 512 * 1024 * 1024,
       vga_memory_size: 8 * 1024 * 1024,
-      filesystem: {
-        baseurl: ASSET_BASE + "/alpine-rootfs-flat",
-        basefs: ASSET_BASE + "/alpine-fs.json"
-      },
-      bzimage_initrd_from_filesystem: true,
-      cmdline: "rw root=host9p rootfstype=9p rootflags=trans=virtio,cache=loose modules=virtio_pci tsc=reliable",
+      disable_speaker: true,
       autostart: true
     };
 
@@ -249,6 +240,32 @@
     const logEl = document.getElementById("log");
 
     let vm = null;
+    let decodedAssets = null;
+
+    function base64ToArrayBuffer(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes.buffer;
+    }
+
+    function getDecodedAssets() {
+      if (decodedAssets) {
+        return decodedAssets;
+      }
+
+      log("Decoding local VM assets into memory...");
+      decodedAssets = {
+        wasm: base64ToArrayBuffer(window.VM_ASSETS_B64.wasm),
+        bios: base64ToArrayBuffer(window.VM_ASSETS_B64.bios),
+        vgabios: base64ToArrayBuffer(window.VM_ASSETS_B64.vgabios),
+        iso: base64ToArrayBuffer(window.VM_ASSETS_B64.alpine_iso)
+      };
+      log("Local assets decoded.");
+      return decodedAssets;
+    }
 
     function setStatus(text) {
       statusEl.textContent = text;
@@ -265,9 +282,9 @@
     }
 
     async function startVm() {
-      if (typeof V86 === "undefined") {
+      if (typeof V86 === "undefined" || typeof window.VM_ASSETS_B64 === "undefined") {
         setStatus("Failed");
-        log("libv86.js did not load. Check your internet connection.");
+        log("Required local scripts did not load (libv86.js or vm-assets.js).");
         return;
       }
 
@@ -288,10 +305,19 @@
       serialEl.textContent = "";
 
       try {
+        const assets = getDecodedAssets();
+
         vm = new V86({
           ...CONFIG,
-          screen_container: screenEl,
-          serial_container: serialEl
+          wasm_fn: function(imports) {
+            return WebAssembly.instantiate(assets.wasm, imports).then(function(result) {
+              return result.instance.exports;
+            });
+          },
+          bios: { buffer: assets.bios.slice(0) },
+          vga_bios: { buffer: assets.vgabios.slice(0) },
+          cdrom: { buffer: assets.iso.slice(0) },
+          screen_container: screenEl
         });
 
         vm.add_listener("emulator-ready", function() {
@@ -312,7 +338,7 @@
           serialWrite(String.fromCharCode(b));
         });
 
-        log("Booting Alpine from hosted root filesystem...");
+        log("Booting Alpine from bundled local ISO...");
       } catch (error) {
         setStatus("Failed");
         startButton.disabled = false;
@@ -328,6 +354,7 @@
     });
 
     log("Ready. Click Start Alpine VM.");
+    log("This build is fully local and does not call external hosts at runtime.");
   </script>
 </body>
 </html>
