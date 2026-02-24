@@ -9,6 +9,9 @@ This repo now includes all required VM assets locally:
 - SeaBIOS + VGA BIOS
 - Alpine Linux ISO
 
+Current bundled Alpine ISO:
+- `alpine-virt-3.23.3-x86_64.iso`
+
 No external network calls are required at runtime.
 
 ## Your Flow
@@ -23,3 +26,4 @@ No external network calls are required at runtime.
 - First boot can take a little time while the browser decodes bundled assets.
 - Use the VGA panel as the primary console.
 - The project is intentionally large because VM binaries are bundled.
+- If package repositories are stale, use the **Fix APK Repos** button in the UI after logging in.

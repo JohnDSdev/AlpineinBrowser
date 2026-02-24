@@ -207,6 +207,7 @@
     <div class="toolbar">
       <button id="start" class="primary">Start Alpine VM</button>
       <button id="restart" disabled>Restart VM</button>
+      <button id="fixRepos" disabled>Fix APK Repos</button>
       <button id="save" disabled>Save State</button>
       <button id="export" disabled>Export Data</button>
       <button id="import">Import Data</button>
@@ -261,6 +262,7 @@
 
     const startButton = document.getElementById("start");
     const restartButton = document.getElementById("restart");
+    const fixReposButton = document.getElementById("fixRepos");
     const saveButton = document.getElementById("save");
     const exportButton = document.getElementById("export");
     const importButton = document.getElementById("import");
@@ -292,6 +294,7 @@
     const AUTO_SAVE_MS = 45000;
     const DISK_CHUNK_SIZE = 64 * 1024;
     const DISK_SIZE_BYTES = 1024 * 1024 * 1024;
+    const APK_BRANCH = "v3.23";
 
     function formatBytes(bytes) {
       if (!bytes || bytes < 1024) {
@@ -595,8 +598,20 @@
 
     function updateButtonsForVmState(running) {
       restartButton.disabled = !running;
+      fixReposButton.disabled = !running;
       saveButton.disabled = !running;
       exportButton.disabled = false;
+    }
+
+    function sendSerialText(text) {
+      if (!vm || !text) {
+        return;
+      }
+      const encoder = new TextEncoder();
+      const bytes = encoder.encode(text);
+      for (let i = 0; i < bytes.length; i += 1) {
+        vm.bus.send("serial0-input", bytes[i]);
+      }
     }
 
     async function loadStoredSnapshot() {
@@ -830,6 +845,16 @@
       await saveSnapshot("restart");
       startVm();
     });
+    fixReposButton.addEventListener("click", function() {
+      const repos = [
+        "http://dl-cdn.alpinelinux.org/alpine/" + APK_BRANCH + "/main",
+        "http://dl-cdn.alpinelinux.org/alpine/" + APK_BRANCH + "/community"
+      ];
+      const command = "printf '%s\\n' '" + repos[0] + "' '" + repos[1] +
+        "' > /etc/apk/repositories && apk update\\n";
+      sendSerialText(command);
+      log("Sent APK repository fix command for " + APK_BRANCH + " to serial console.");
+    });
     saveButton.addEventListener("click", function() {
       saveSnapshot("manual");
     });
@@ -873,6 +898,7 @@
     log("Persistence: VM state is auto-saved in IndexedDB and restored on next start.");
     log("Disk: a real 1.00 GB virtual hard disk is stored in IndexedDB.");
     log("Import/Export: use .v86state files to move the full machine state.");
+    log("APK repos: click 'Fix APK Repos' after login if package links are stale.");
     log("Network: toggle relay before boot if you want internet from inside Alpine.");
     updateButtonsForVmState(false);
     exportButton.disabled = false;
